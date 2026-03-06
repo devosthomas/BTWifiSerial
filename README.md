@@ -5,7 +5,7 @@ ESP32-C3 firmware that acts as a BLE-to-Serial bridge for EdgeTX/OpenTX RC radio
 ## Features
 
 - **FrSky Trainer** — emulates a CC2540 BLE module for wireless trainer link
-- **SBUS Trainer** — outputs standard SBUS signal via UART (100000 8E2 inverted)
+- **SBUS Trainer** — outputs standard SBUS signal via UART (100000 8E2)
 - **S.PORT Telemetry** — receives and forwards telemetry data via WiFi UDP or BLE
 - **Web Configuration** — dark-themed responsive WebUI served from the ESP32's own WiFi AP
 - **OTA Updates** — drag-and-drop firmware upload from the browser
@@ -24,10 +24,23 @@ ESP32-C3 firmware that acts as a BLE-to-Serial bridge for EdgeTX/OpenTX RC radio
 
 ### Wiring to a Radio
 
-Connect **GPIO20 (RX)** and **GPIO21 (TX)** to the radio's Trainer or AUX serial port. Power the module from the radio's 3.3V supply or USB.
+Connect **GPIO21 (TX)** to the radio's AUX signal pin and share a common **GND**. You can power the module from the radio's supply (check voltage — see note below).
 
-- **Radios with built-in Bluetooth** (e.g. Radiomaster Boxer, TX16S): Set `BLUETOOTH = ON` in EdgeTX. The radio sends AT commands + trainer/telemetry data over its internal BT UART. BTWifiSerial responds to the AT handshake and processes the data stream transparently — no wiring needed if replacing the internal BT module, or connect via BLE.
-- **Radios with external module bay / UART**: Wire the ESP32-C3 to an available UART port (Trainer port, AUX1, or AUX2). Configure the appropriate serial mode in the WebUI.
+#### Signal level and power
+
+The ESP32-C3 operates at **3.3V logic**. GPIO pins are **not 5V tolerant**.
+
+- Most EdgeTX radios (TX16S, Boxer, etc.) have 3.3V logic on their AUX/Trainer ports — direct connection is safe.
+- If connecting to a 5V port, use a level shifter or voltage divider on the RX line.
+- The 5V supply pin on AUX connectors can be used to power the ESP32-C3 via its 5V/USB input pad.
+
+#### Radios with built-in Bluetooth (e.g. Radiomaster TX16S, Boxer)
+
+Set `BLUETOOTH = ON` in EdgeTX System Settings. The radio communicates with the module over its internal Bluetooth UART using AT commands + FrSky protocol. BTWifiSerial handles this transparently — no extra wiring needed when the module replaces the internal BT module, or connect via BLE from Central mode.
+
+#### Radios with AUX/Trainer UART port
+
+Wire GPIO21 (TX) to the AUX signal pin and GND to GND. Configure the matching serial mode in the WebUI. See the [EdgeTX Radio Configuration](#edgetx-radio-configuration) section for exact EdgeTX settings per mode.
 
 ## Getting Started
 
@@ -68,11 +81,15 @@ Emulates a FrSky CC2540 BLE module. Sends and receives 8-channel trainer data us
 
 ### SBUS Trainer
 
-Outputs a standard SBUS signal on the TX pin at 100000 baud 8E2 with hardware signal inversion.
+Outputs a standard SBUS signal on the TX pin at 100000 baud 8E2.
 
 - **Use case:** Feed channel data to any SBUS-compatible receiver, flight controller, or simulator dongle.
 - **Channel mapping:** PPM 1050–1950 → SBUS 172–1811 (16 channels, unused channels held at center 992).
 - **Frame rate:** ~14ms. Frame-lost flag is set automatically if no BLE data arrives for 1 second.
+
+> **Signal inversion note:** The SBUS protocol is normally inverted (idle LOW). Some radios (e.g. Radiomaster TX16S, TX12) have a **hardware inverter** on the AUX port, so the ESP32 must output a **non-inverted** signal. Other radios/receivers without a hardware inverter expect the standard inverted SBUS. The `SBUS_HW_INVERT` build flag in `platformio.ini` controls this:
+> - `-D SBUS_HW_INVERT=0` — no ESP32 inversion (use with TX16S, TX12, and radios with a hardware inverter on AUX)
+> - Remove or comment that flag — ESP32 inverts the signal (use with receivers or devices that expect standard SBUS)
 
 ### S.PORT Telemetry (BT)
 
@@ -182,6 +199,48 @@ BTWifiSerial responds to the HM-10/CC2540 AT command set that EdgeTX uses when `
 | `AT+DISC?` | `OK+DISCS` → results → `OK+DISCE` | BLE scan (Central) |
 | `AT+CONaddr` | `OK+CONNA` | Connect to device |
 | `AT+CLEAR` | `OK+CLEAR` | Disconnect |
+
+## EdgeTX Radio Configuration
+
+This section covers how to configure EdgeTX for each serial mode.
+
+### SBUS Trainer (via AUX port)
+
+This is the recommended mode for wired head-tracker input using HeadTracker or any BLE device that outputs FrSky-compatible channels.
+
+**Step 1 — Hardware port (System Settings)**
+
+`SYS` → `Hardware` → find your AUX port (AUX1 or AUX2) → set it to **SBUS Trainer**.
+
+**Step 2 — Trainer mode (Model Settings)**
+
+`MDL` → `Trainer` → set mode to **Master/Serial**.
+
+> ⚠️ Do **not** use `Master/SBUS Module` — that mode reads from the external module bay, not from the AUX port.
+
+**Step 3 — Channel override (Mixer)**
+
+In `MDL` → `Mixes`, add a mix on the target channel using input source `TR1`, `TR2`, etc. and assign a switch to activate it. When the switch is active and BLE data is arriving, the trainer channels will override the stick inputs.
+
+---
+
+### FrSky Trainer / S.PORT (via built-in Bluetooth)
+
+For radios with internal Bluetooth (TX16S, Boxer, etc.):
+
+1. `SYS` → `Bluetooth` → mode: **Trainer** or **Telemetry** depending on use case.
+2. The radio will scan for and connect to the module by name (default: `BTWifiSerial`).
+3. No AUX port wiring needed — Bluetooth is used end-to-end.
+
+---
+
+### S.PORT Telemetry Mirror (via AUX port)
+
+1. `SYS` → `Hardware` → set AUX port to **Telemetry Mirror**.
+2. In the WebUI, set Serial Mode to **S.PORT Telemetry (Mirror)** and match the baud rate (57600 for most radios, 115200 for TX16S/Horus).
+3. Select telemetry output destination (WiFi UDP or BLE).
+
+---
 
 ## Build
 
