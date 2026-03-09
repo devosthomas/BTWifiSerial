@@ -42,6 +42,9 @@ void configLoad() {
     g_config.udpPort         = prefs.getUShort("udpPort", 5010);
     g_config.sportBaud       = prefs.getULong("sportBaud", 57600);
 
+    // Trainer map mode
+    g_config.trainerMapMode  = (TrainerMapMode)prefs.getUChar("mapMode", (uint8_t)TrainerMapMode::MAP_GV);
+
     // WiFi AP settings
     String ssid = prefs.getString("apSsid", "BTWifiSerial");
     strlcpy(g_config.apSsid, ssid.c_str(), sizeof(g_config.apSsid));
@@ -91,6 +94,9 @@ void configSave() {
     prefs.putUChar("telemOut", (uint8_t)g_config.telemetryOutput);
     prefs.putUShort("udpPort", g_config.udpPort);
     prefs.putULong("sportBaud", g_config.sportBaud);
+
+    // Trainer map mode
+    prefs.putUChar("mapMode", (uint8_t)g_config.trainerMapMode);
 
     // WiFi AP settings
     prefs.putString("apSsid", g_config.apSsid);

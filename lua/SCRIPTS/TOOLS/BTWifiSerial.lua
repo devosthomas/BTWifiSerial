@@ -43,6 +43,8 @@ local CMD_TELEM_BLE     = 0x0D  -- switch telemetry output → BLE         (save
 local CMD_TELEM_OFF     = 0x0E  -- switch telemetry output → Off          (saves config, restarts)
 local CMD_BAUD_57600    = 0x0F  -- set mirror baud → 57600  (saves config, restarts)
 local CMD_BAUD_115200   = 0x23  -- set mirror baud → 115200 (saves config, restarts)
+local CMD_MAP_GV        = 0x24  -- set trainer map mode → GV (global vars)
+local CMD_MAP_TR        = 0x25  -- set trainer map mode → TR (trainer channels)
 local CMD_BLE_CONNECT_BASE = 0x10  -- +index (0..15)
 local T_STR_SET          = 0x4E  -- string-set frame (Lua→ESP32)
 local STR_BT_NAME        = 0x01
@@ -54,6 +56,7 @@ local NUMSET  = "0123456789"
 local NUM_CH         = 8
 local MODAL_TIMEOUT  = 1000   -- 10 s (getTime ticks at 10 ms each)
 local SHM_TOOLS_HB   = 1      -- shared memory slot: Tools heartbeat (getTime value)
+local SHM_MAP_MODE   = 2      -- shared memory slot: Trainer map mode (0=GV, 1=TR)
 
 -- ═══════════════════════════════════════════════════════════════════
 -- DISPLAY
@@ -239,6 +242,7 @@ local currentPage    = 1       -- 1 = Dashboard, 2 = Bluetooth, 3 = Settings
 local deviceMode     = 0      -- 0=Trainer IN, 1=Trainer OUT, 2=Telemetry
 local apMode         = 1      -- 0=AP blocked, 1=normal, 2=telemetry AP
 local tlmOutput      = 0      -- 0=WiFi UDP, 1=BLE (last value from T_CFG byte 4)
+local trainerMapMode = 0      -- 0=GV, 1=TR (last value from T_CFG byte 5)
 local scanState      = 0       -- 0=idle, 1=scanning, 2=complete
 local scanStartT     = 0       -- getTime() when scan started (for timeout)
 local scanResults    = {}      -- array of {name, rssi, hasFrsky, addr}
@@ -270,6 +274,7 @@ local menuItems = {
   { "Device Mode", {"Trainer IN", "Trainer OUT", "Telemetry"}, {CMD_DEV_TRAINER_IN, CMD_DEV_TRAINER_OUT, CMD_DEV_TELEMETRY}, 1, 1 },
   { "Telem Output", {"WiFi", "BLE", "Off"}, {CMD_TELEM_WIFI, CMD_TELEM_BLE, CMD_TELEM_OFF}, 1, 1 },
   { "Mirror Baud", {"57600", "115200"}, {CMD_BAUD_57600, CMD_BAUD_115200}, 1, 1 },
+  { "Trainer Map", {"GV", "TR"}, {CMD_MAP_GV, CMD_MAP_TR}, 1, 1 },
   -- text items: { label, "text", subCmd }
   { "BT Name",     "text", STR_BT_NAME },
   { "SSID",        "text", STR_SSID },
@@ -489,9 +494,9 @@ end
 -- deviceMode value: 0=Trainer IN, 1=Trainer OUT, 2=Telemetry
 -- tlmOutput value: 0=WiFi UDP, 1=BLE
 local function applyConfig()
-  -- rxBuf[1]=T_CFG, rxBuf[2]=apMode, rxBuf[3]=deviceMode, rxBuf[4]=tlmOutput, rxBuf[5]=CRC
-  local crc = bit32.bxor(bit32.bxor(bit32.bxor(rxBuf[1], rxBuf[2]), rxBuf[3]), rxBuf[4])
-  if crc ~= rxBuf[5] then return end
+  -- rxBuf[1]=T_CFG, rxBuf[2]=apMode, rxBuf[3]=deviceMode, rxBuf[4]=tlmOutput, rxBuf[5]=mapMode, rxBuf[6]=CRC
+  local crc = bit32.bxor(bit32.bxor(bit32.bxor(bit32.bxor(rxBuf[1], rxBuf[2]), rxBuf[3]), rxBuf[4]), rxBuf[5])
+  if crc ~= rxBuf[6] then return end
   -- AP Mode menu mapping:
   --   apMode 0 (regular AP, blocks Lua) → "On"  (index 1)
   --   apMode 1 (normal operation)        → "Off" (index 2)
@@ -518,6 +523,11 @@ local function applyConfig()
     end
     if not found then currentPage = 1 end
   end
+  -- Sync trainer map mode
+  trainerMapMode = rxBuf[5]    -- 0=GV, 1=TR
+  local mmap = rxBuf[5] + 1
+  if menuItems[5] then menuItems[5][4] = mmap; menuItems[5][5] = mmap end
+  if setShmVar then setShmVar(SHM_MAP_MODE, trainerMapMode) end
   gotConfig = true
   -- Safety net: if a modal was stuck waiting while board restarted, close it
   if modal.active and modal.state == "saving" then modal.active = false end
@@ -669,7 +679,7 @@ local function processByte(b)
     if     b == T_CH  then rxNeeded = 17; rxState = 2
     elseif b == T_ST  then rxNeeded = 2;  rxState = 2
     elseif b == T_ACK then rxNeeded = 2;  rxState = 2
-    elseif b == T_CFG then rxNeeded = 4;  rxState = 2
+    elseif b == T_CFG then rxNeeded = 5;  rxState = 2
     elseif b == T_INF then rxNeeded = 13; rxState = 2
     elseif b == T_SYS then rxNeeded = 89; rxState = 2
     elseif b == T_SCAN_STATUS then rxNeeded = 3;  rxState = 2

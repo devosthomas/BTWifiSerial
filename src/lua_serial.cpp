@@ -38,6 +38,8 @@ static constexpr uint8_t  STR_SUB_UDP_PORT = 0x03; // subcommand: set UDP port
 static constexpr uint8_t  STR_SUB_AP_PASS  = 0x04; // subcommand: set AP password
 static constexpr uint8_t  LUA_CMD_BAUD_57600     = 0x0F; // set mirror baud → 57600
 static constexpr uint8_t  LUA_CMD_BAUD_115200    = 0x23; // set mirror baud → 115200
+static constexpr uint8_t  LUA_CMD_MAP_GV         = 0x24; // set trainer map mode → GV (global vars)
+static constexpr uint8_t  LUA_CMD_MAP_TR         = 0x25; // set trainer map mode → TR (trainer channels)
 static constexpr uint8_t  LUA_CMD_TOGGLE_AP     = 0x01;
 static constexpr uint8_t  LUA_CMD_AP_ON          = 0x02;
 static constexpr uint8_t  LUA_CMD_AP_OFF         = 0x03;
@@ -68,8 +70,8 @@ static constexpr uint8_t  CH_FRAME_LEN = 19;
 static constexpr uint8_t  ST_FRAME_LEN = 4;
 // ACK frame: sync(1) + type(1) + result(1) + CRC(1) = 4 bytes
 static constexpr uint8_t  ACK_FRAME_LEN = 4;
-// Config frame: sync(1) + type(1) + apMode(1) + deviceMode(1) + tlmOutput(1) + CRC(1) = 6 bytes
-static constexpr uint8_t  CFG_FRAME_LEN = 6;
+// Config frame: sync(1) + type(1) + apMode(1) + deviceMode(1) + tlmOutput(1) + mapMode(1) + CRC(1) = 7 bytes
+static constexpr uint8_t  CFG_FRAME_LEN = 7;
 // Info frame: sync(1) + type(1) + 12 ASCII timestamp bytes + CRC(1) = 15 bytes
 static constexpr uint8_t  INF_PAYLOAD_LEN = 12;
 static constexpr uint8_t  INF_FRAME_LEN   = 15;
@@ -254,8 +256,9 @@ static void sendConfigFrame() {
                      (s_apMode == 2) ? 2 : 1; // telem-AP  → 2; normal → 1
     uint8_t dev  = static_cast<uint8_t>(g_config.deviceMode);
     uint8_t tout = static_cast<uint8_t>(g_config.telemetryOutput);
-    uint8_t crc  = LUA_TYPE_CFG ^ apByte ^ dev ^ tout;
-    uint8_t frame[CFG_FRAME_LEN] = {LUA_SYNC, LUA_TYPE_CFG, apByte, dev, tout, crc};
+    uint8_t mmap = static_cast<uint8_t>(g_config.trainerMapMode);
+    uint8_t crc  = LUA_TYPE_CFG ^ apByte ^ dev ^ tout ^ mmap;
+    uint8_t frame[CFG_FRAME_LEN] = {LUA_SYNC, LUA_TYPE_CFG, apByte, dev, tout, mmap, crc};
     uart_write_bytes(UART_NUM_1, (const char*)frame, CFG_FRAME_LEN);
 }
 
@@ -491,6 +494,22 @@ static void executeCommand(uint8_t cmd) {
             LOG_I("LUA", "Received CMD: Mirror baud -> 115200");
             sendAckFrame(0x00);
             mainSetMirrorBaud(115200);
+            break;
+        case LUA_CMD_MAP_GV:
+            LOG_I("LUA", "Received CMD: Trainer map -> GV");
+            g_config.trainerMapMode = TrainerMapMode::MAP_GV;
+            configSave();
+            sendConfigFrame();
+            s_lastCfgMs = millis();
+            sendAckFrame(0x00);
+            break;
+        case LUA_CMD_MAP_TR:
+            LOG_I("LUA", "Received CMD: Trainer map -> TR");
+            g_config.trainerMapMode = TrainerMapMode::MAP_TR;
+            configSave();
+            sendConfigFrame();
+            s_lastCfgMs = millis();
+            sendAckFrame(0x00);
             break;
         default:
             if (cmd >= LUA_CMD_BLE_CONNECT_0 && cmd <= (LUA_CMD_BLE_CONNECT_0 + 15)) {

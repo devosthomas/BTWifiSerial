@@ -105,15 +105,16 @@ script receives the ACK.
 
 ---
 
-### 3.4 Config frame — `T_CFG` `0x47`  (6 bytes)
+### 3.4 Config frame — `T_CFG` `0x47`  (7 bytes)
 
 Sent in three situations:
 - Immediately upon receiving `CMD_REQ_INFO`.
 - Periodically every **30 s** (resync).
 - Inside `luaSerialLoop()` when 30 s have elapsed since the last send.
+- After a `CMD_MAP_GV` or `CMD_MAP_TR` command (before the ACK).
 
 ```
-[AA] [47] [AP_MODE] [DEV_MODE] [TLM_OUTPUT] [CRC]
+[AA] [47] [AP_MODE] [DEV_MODE] [TLM_OUTPUT] [MAP_MODE] [CRC]
 ```
 
 | Field       | Offset | Value | Description                                       |
@@ -127,7 +128,9 @@ Sent in three situations:
 | TLM_OUTPUT  | 4      | `0`   | Telemetry output = **WiFi UDP**                   |
 | TLM_OUTPUT  | 4      | `1`   | Telemetry output = **BLE**                        |
 | TLM_OUTPUT  | 4      | `2`   | Telemetry output = **Off** (discard packets)      |
-| CRC         | 5      |       | XOR of bytes [1..4]                               |
+| MAP_MODE    | 5      | `0`   | Trainer Map = **GV** (Global Variables GV1–GV8)   |
+| MAP_MODE    | 5      | `1`   | Trainer Map = **TR** (Trainer channels TR1–TR8)   |
+| CRC         | 6      |       | XOR of bytes [1..5]                               |
 
 The script uses this frame to sync the settings menu and to transition the
 application state to `AP_ACTIVE` when `AP_MODE == 0`.  When `AP_MODE == 2`
@@ -227,12 +230,16 @@ The script sends two types of frames to the ESP32.
 | `0x21` | `CMD_DEV_TRAINER_OUT`| Set device mode → Trainer OUT (save + restart). Clears telemetry output to Off. |
 | `0x22` | `CMD_DEV_TELEMETRY`  | Set device mode → Telemetry (save + restart)                   |
 | `0x23` | `CMD_BAUD_115200`    | Set S.PORT Mirror baud rate → 115200 (save + restart)          |
+| `0x24` | `CMD_MAP_GV`         | Set Trainer Map → GV (save, send T_CFG, no reboot)             |
+| `0x25` | `CMD_MAP_TR`         | Set Trainer Map → TR (save, send T_CFG, no reboot)             |
 
 Commands `0x01`, `0x02`, `0x03`, `0x0C`, `0x0D`, `0x0E`, `0x0F`, `0x20`,
 `0x21`, `0x22`, `0x23` receive a `T_ACK` before the ESP32 reboots.
-Commands `0x08`, `0x09`, `0x0A`, `0x0B`, `0x10`–`0x1F` receive a `T_ACK`
-immediately (no reboot).  Command `0x06` does **not** generate a `T_ACK`;
-the response is the three info frames directly.
+Commands `0x08`, `0x09`, `0x0A`, `0x0B`, `0x10`–`0x1F`, `0x24`, `0x25`
+receive a `T_ACK` immediately (no reboot).  Commands `0x24` and `0x25`
+additionally send a `T_CFG` frame **before** the `T_ACK` so the script can
+update its state immediately.  Command `0x06` does **not** generate a
+`T_ACK`; the response is the three info frames directly.
 
 ---
 
@@ -362,7 +369,7 @@ Script (INIT state)                 ESP32
      │                                │──► sendConfigFrame()
      │                                │──► sendInfoFrame()
      │                                │──► sendSysFrame()
-     │◄─── T_CFG  (6 bytes)  ────────│
+     │◄─── T_CFG  (7 bytes)  ────────│
      │◄─── T_INF  (15 bytes) ────────│
      │◄─── T_SYS  (56 bytes) ────────│
      │                                │
@@ -487,7 +494,7 @@ gated by a Tools-active idle timer on the firmware side.
 
 **Rationale:** `btwfs.lua` (background Functions script) runs continuously but
 never sends commands. Without gating, the firmware would blast a 91-byte
-`T_SYS` + 15-byte `T_INF` + 6-byte `T_CFG` burst every 30 s into the UART
+`T_SYS` + 15-byte `T_INF` + 7-byte `T_CFG` burst every 30 s into the UART
 buffer — bytes that `btwfs.lua` would discard. With gating, those bursts only
 happen when `BTWifiSerial.lua` (Tools) is actually open.
 
@@ -539,6 +546,8 @@ t=50s     (30s resync check) 15s > TOOLS_IDLE_TIMEOUT → resync suppressed
 | `CMD_DEV_TRAINER_IN`  | `0x20` | Command: device mode → Trainer IN (save + restart)  |
 | `CMD_DEV_TRAINER_OUT` | `0x21` | Command: device mode → Trainer OUT (save + restart) |
 | `CMD_DEV_TELEMETRY`   | `0x22` | Command: device mode → Telemetry (save + restart)   |
+| `CMD_MAP_GV`          | `0x24` | Command: trainer map → GV (save + T_CFG, no reboot) |
+| `CMD_MAP_TR`          | `0x25` | Command: trainer map → TR (save + T_CFG, no reboot) |
 | `T_SCAN_STATUS`       | `0x44` | Type: BLE scan state notification  |
 | `T_SCAN_ENTRY`        | `0x52` | Type: BLE scan result entry        |
 | `T_TLM`               | `0x54` | Type: S.PORT telemetry fwd (RX)    |

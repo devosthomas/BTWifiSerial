@@ -24,6 +24,8 @@ local NUM_CH = 8
 
 -- Shared memory slot used by Tools script as heartbeat
 local SHM_TOOLS_HB = 1
+local SHM_MAP_MODE = 2  -- Trainer map mode: 0=GV, 1=TR
+local mapMode = 0       -- local cache (updated from SHM or T_CFG fallback)
 
 local rxState  = 0
 local rxType   = 0
@@ -38,7 +40,7 @@ local function processByte(b)
     if     b == T_CH           then rxNeeded = 17; rxState = 2
     elseif b == T_ST           then rxNeeded = 2;  rxState = 2
     elseif b == T_ACK          then rxNeeded = 2;  rxState = 2
-    elseif b == T_CFG          then rxNeeded = 4;  rxState = 2
+    elseif b == T_CFG          then rxNeeded = 5;  rxState = 2
     elseif b == T_INF          then rxNeeded = 13; rxState = 2
     elseif b == T_SYS          then rxNeeded = 89; rxState = 2
     elseif b == T_SCAN_STATUS  then rxNeeded = 3;  rxState = 2
@@ -52,17 +54,30 @@ local function processByte(b)
         local crc = 0
         for i = 1, 17 do crc = bit32.bxor(crc, rxBuf[i]) end
         if crc == rxBuf[18] then
+          -- Read map mode: prefer SHM (written by Tools), fall back to local cache
+          if getShmVar then
+            local sm = getShmVar(SHM_MAP_MODE)
+            if sm and sm >= 0 then mapMode = sm end
+          end
           for i = 0, NUM_CH - 1 do
             local v = rxBuf[2 + i*2] * 256 + rxBuf[3 + i*2]
             if v >= 32768 then v = v - 65536 end
-            -- Clamp to EdgeTX GVar range; setGlobalVariable silently ignores
-            -- values outside ±1024.
             v = math.max(-1024, math.min(1024, v))
-            pcall(model.setGlobalVariable, i, 0, v)
+            if mapMode == 1 and type(setTrainerChannel) == "function" then
+              pcall(setTrainerChannel, i, math.floor(v / 2))
+            else
+              pcall(model.setGlobalVariable, i, 0, v)
+            end
           end
         end
+      elseif rxType == T_CFG then
+        -- Fallback: parse T_CFG to get mapMode when Tools script is not running
+        -- rxBuf[1]=T_CFG, [2]=apMode, [3]=devMode, [4]=tlmOut, [5]=mapMode, [6]=CRC
+        local crc = bit32.bxor(bit32.bxor(bit32.bxor(bit32.bxor(rxBuf[1], rxBuf[2]), rxBuf[3]), rxBuf[4]), rxBuf[5])
+        if crc == rxBuf[6] then
+          mapMode = rxBuf[5]  -- 0=GV, 1=TR
+        end
       end
-      -- All other frame types: consumed to keep parser in sync, not acted on
       rxState = 0
     end
   end

@@ -153,6 +153,15 @@ Shows the current BLE connection status, serial mode, BLE role, device name, loc
 
 Select the operating mode from the dropdown. Takes effect immediately (saved to flash).
 
+### Trainer Map (LUA Serial mode only)
+
+Select how received channel data is injected into the radio:
+
+- **GV** — writes to Global Variables GV1–GV8 (default). Use `GV1`–`GV8` as mixer inputs.
+- **TR** — injects via Trainer channels TR1–TR8 (values scaled ±1024 → ±512). Use `TR1`–`TR8` as mixer inputs.
+
+This option is only visible when Serial Mode is set to **LUA Serial**.
+
 ### Telemetry Output
 
 Visible only when a S.PORT mode is selected. Configure:
@@ -268,7 +277,9 @@ For radios with internal Bluetooth (TX16S, Boxer, etc.):
    - **Function:** `Lua Script`
    - **Script:** `btwfs`
 4. Open the **BTWifiSerial** Tools script from the radio's Tools menu to access the configuration UI.
-5. Channel data is written to GV1–GV8 in Flight Mode 0. Use `GV1`–`GV8` as mixer inputs to feed the trainer channels into your model.
+5. Channel data injection depends on the **Trainer Map** setting (configurable from the BTWifiSerial Tools script or the Web UI):
+   - **GV** (default) — values are written to GV1–GV8 in Flight Mode 0. Use `GV1`–`GV8` as mixer inputs.
+   - **TR** — values are injected via `setTrainerChannel()` (±1024 → ±512). Use `TR1`–`TR8` as mixer inputs, and set Trainer mode to **Master/Serial** in Model Settings.
 
 > **Telemetry forwarding:** If the radio has active telemetry sensors, `btwfs.lua` automatically forwards S.PORT packets to the ESP32 via `T_TLM` frames. Configure the telemetry output (WiFi UDP, BLE, or Off) from the Telemetry page in the BTWifiSerial Tools script.
 
@@ -284,11 +295,14 @@ Two Lua scripts work together to provide full on-radio integration in LUA Serial
 
 Runs continuously as an EdgeTX Special Function (`Lua Script`, switch `ON`). Responsibilities:
 
-- **Channel data:** Parses `T_CH` frames from the ESP32 and writes 8 signed channel values (−1024 to +1024) into Global Variables GV1–GV8 (Flight Mode 0).
+- **Channel data:** Parses `T_CH` frames from the ESP32 and injects 8 signed channel values (−1024 to +1024) into the radio. The injection method depends on the **Trainer Map** setting:
+  - **GV** (default) — writes values to Global Variables GV1–GV8 (Flight Mode 0). Use `GV1`–`GV8` as mixer inputs.
+  - **TR** — calls `setTrainerChannel()` with values divided by 2 (±1024 → ±512, matching EdgeTX's ±512 trainer range). Use `TR1`–`TR8` as mixer inputs.
+- **Config fallback:** When the BTWifiSerial Tools script is not running, `btwfs.lua` reads the Trainer Map setting directly from the `T_CFG` frame sent by the ESP32, ensuring correct injection mode without user intervention.
 - **Telemetry forwarding:** Calls `sportTelemetryPop()` each frame to collect pending S.PORT packets and sends them to the ESP32 as `T_TLM` frames (up to 8 packets per frame).
-- **Coexistence:** When the BTWifiSerial Tools script is active, incoming serial bytes are yielded to it via a shared-memory heartbeat mechanism. Telemetry forwarding continues independently.
+- **Coexistence:** When the BTWifiSerial Tools script is active, incoming serial bytes are yielded to it via a shared-memory heartbeat mechanism. The Trainer Map mode is communicated via shared memory (SHM slot 2). Telemetry forwarding continues independently.
 
-> **Resource efficiency:** `btwfs.lua` consumes only `T_CH` frames (channel data). All other frame types (`T_CFG`, `T_INF`, `T_SYS`) are discarded by the parser. The firmware detects when the Tools script is closed and suppresses the heavy periodic resync burst (`T_CFG + T_INF + T_SYS` every 30 s), sending only `T_CH` and `T_ST` while the background script runs alone.
+> **Resource efficiency:** `btwfs.lua` consumes `T_CH` frames (channel data) and `T_CFG` frames (to read the Trainer Map mode as a fallback when the Tools script is not running). All other frame types (`T_INF`, `T_SYS`) are discarded by the parser. The firmware detects when the Tools script is closed and suppresses the heavy periodic resync burst (`T_CFG + T_INF + T_SYS` every 30 s), sending only `T_CH` and `T_ST` while the background script runs alone.
 
 ### BTWifiSerial.lua — Tools Script
 
@@ -301,6 +315,7 @@ Opened from the radio's `SYS` → `Tools` menu. Provides a full-screen multi-pag
 | **Dashboard** | Shows BLE connection status, system information (build version, serial mode, BT name, addresses), AP mode toggle. |
 | **Bluetooth** | BLE role selection (Peripheral/Central/Telemetry), scan for devices (Central mode), connect/disconnect/forget saved peers. |
 | **Telemetry** | Select telemetry output (WiFi UDP, BLE, or Off). Saving triggers a config write + ESP32 restart. |
+| **Options** | Configure Trainer Map mode (GV or TR) — determines how received channel data is injected into the radio. |
 | **Settings** | Configure WiFi AP SSID, AP password, UDP port, and S.PORT Mirror baud rate. Changes that require a network restart trigger an automatic reboot. |
 
 The Tools script communicates with the ESP32 via command frames (`T_CMD`) and receives configuration/status via `T_CFG`, `T_INF`, `T_SYS`, and `T_ACK` frames.

@@ -40,6 +40,12 @@ enum class DeviceMode : uint8_t {
     TELEMETRY   = 2   // Telemetry relay: forward S.PORT via WiFi UDP or BLE
 };
 
+// ─── Trainer channel mapping mode ───────────────────────────────────
+enum class TrainerMapMode : uint8_t {
+    MAP_GV = 0,  // Inject BLE channels into Global Variables (GV1–GV8)
+    MAP_TR = 1   // Inject BLE channels into Trainer inputs via setTrainerChannel()
+};
+
 inline bool bleIsCentral(DeviceMode m) { return m == DeviceMode::TRAINER_IN; }
 
 // ─── Configuration structure ────────────────────────────────────────
@@ -57,6 +63,9 @@ struct Config {
     uint16_t        udpPort;             // UDP broadcast port (default 5010)
     uint32_t        sportBaud;           // Baud for SPORT_MIRROR (57600 or 115200)
 
+    // Trainer channel mapping
+    TrainerMapMode  trainerMapMode;      // GV (global vars) or TR (trainer channels)
+
     // WiFi AP settings
     char            apSsid[16];          // AP SSID (max 15 chars + null)
     char            apPass[16];          // AP password (max 15 chars + null)
@@ -72,6 +81,7 @@ struct Config {
         telemetryOutput = TelemetryOutput::NONE;
         udpPort         = 5010;
         sportBaud       = 57600;
+        trainerMapMode  = TrainerMapMode::MAP_GV;
         strlcpy(apSsid, "BTWifiSerial", sizeof(apSsid));
         strlcpy(apPass, "12345678", sizeof(apPass));
     }

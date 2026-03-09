@@ -139,6 +139,13 @@ progress{width:100%;height:8px;margin-top:10px;display:none;accent-color:var(--a
     <option value="sport_mirror">S.PORT Telemetry (Mirror)</option>
     <option value="lua_serial">LUA Serial (EdgeTX)</option>
   </select>
+  <div id="mapModeRow" style="display:none">
+    <label>Trainer Map</label>
+    <select id="selMapMode" onchange="setMapMode(this.value)">
+      <option value="gv">GV (Global Variables)</option>
+      <option value="tr">TR (Trainer Channels)</option>
+    </select>
+  </div>
   <label>BT Name</label>
   <div class="irow">
     <input type="text" id="inName" maxlength="15" placeholder="BTWifiSerial">
@@ -300,6 +307,10 @@ function handle(m){
       document.getElementById('inApPass').value=m.apPass||'';
     document.getElementById('scanCard').style.display=m.deviceMode==='trainer_in'?'':'none';
     document.getElementById('perCard').style.display=m.deviceMode==='trainer_out'?'':'none';
+    // Trainer map mode visibility (LUA Serial only)
+    const isLua=m.serialMode==='lua_serial';
+    document.getElementById('mapModeRow').style.display=isLua?'':'none';
+    if(isLua) document.getElementById('selMapMode').value=m.mapMode||'gv';
     // Telemetry card visibility
     const isTelem=m.serialMode==='sport_bt'||m.serialMode==='sport_mirror';
     document.getElementById('telemCard').style.display=isTelem?'':'none';
@@ -366,6 +377,7 @@ function handle(m){
 function setSerialMode(v){send({cmd:'setSerialMode',value:v});}
 function setTelemOutput(v){send({cmd:'setTelemOutput',value:v});}
 function setMirrorBaud(v){send({cmd:'setMirrorBaud',value:v});}
+function setMapMode(v){send({cmd:'setMapMode',value:v});}
 function setUdpPort(){send({cmd:'setUdpPort',value:document.getElementById('inUdpPort').value});}
 function setBtName(){send({cmd:'setBtName',value:document.getElementById('inName').value});}
 function setSsid(){showConfirm('Change SSID','Change AP SSID? The device will restart.',function(){send({cmd:'setSsid',value:document.getElementById('inSsid').value});});}
@@ -494,6 +506,9 @@ static void handleWebSocketMessage(AsyncWebSocketClient* client, uint8_t* data, 
         resp["sportPkts"]   = String(sportGetPacketCount());
         resp["sportPps"]    = String(sportGetPacketsPerSec());
 
+        // Trainer map mode
+        resp["mapMode"]     = g_config.trainerMapMode == TrainerMapMode::MAP_TR ? "tr" : "gv";
+
         // Telemetry output status
         if (g_config.serialMode == OutputMode::SPORT_BT ||
             g_config.serialMode == OutputMode::SPORT_MIRROR) {
@@ -503,6 +518,20 @@ static void handleWebSocketMessage(AsyncWebSocketClient* client, uint8_t* data, 
                 resp["sportOutSt"] = sportBleIsForwarding() ? "BLE Active" : "Waiting for client";
             }
         }
+    }
+    // ─── setMapMode ─────────────────────────────────────────────
+    else if (strcmp(cmd, "setMapMode") == 0) {
+        const char* val = doc["value"];
+        if (val) {
+            g_config.trainerMapMode = (strcmp(val, "tr") == 0)
+                                      ? TrainerMapMode::MAP_TR
+                                      : TrainerMapMode::MAP_GV;
+            LOG_I("WEB", "Trainer map mode set to %s", val);
+            configSave();
+        }
+        resp["type"] = "ack";
+        resp["cmd"]  = cmd;
+        resp["ok"]   = true;
     }
     // ─── setSerialMode ──────────────────────────────────────────
     else if (strcmp(cmd, "setSerialMode") == 0) {
