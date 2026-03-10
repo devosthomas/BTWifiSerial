@@ -59,16 +59,19 @@ local function processByte(b)
             local sm = getShmVar(SHM_MAP_MODE)
             if sm and sm >= 0 then mapMode = sm end
           end
+          local trainerMode = (mapMode == 1) and (type(setTrainerChannels) == "function")
+          local tr = trainerMode and {}
           for i = 0, NUM_CH - 1 do
             local v = rxBuf[2 + i*2] * 256 + rxBuf[3 + i*2]
             if v >= 32768 then v = v - 65536 end
             v = math.max(-1024, math.min(1024, v))
-            if mapMode == 1 and type(setTrainerChannel) == "function" then
-              pcall(setTrainerChannel, i, math.floor(v / 2))
+            if tr then
+              tr[i + 1] = math.floor(v / 2)
             else
               pcall(model.setGlobalVariable, i, 0, v)
             end
           end
+          if tr then pcall(setTrainerChannels, tr) end
         end
       elseif rxType == T_CFG then
         -- Fallback: parse T_CFG to get mapMode when Tools script is not running

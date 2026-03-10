@@ -450,15 +450,20 @@ local function applyChannels()
   local crc = 0
   for i = 1, 17 do crc = bit32.bxor(crc, rxBuf[i]) end
   if crc ~= rxBuf[18] then return end
+  local trainerMode = (trainerMapMode == 1) and (type(setTrainerChannels) == "function")
+  local tr = trainerMode and {}
   for i = 0, NUM_CH - 1 do
     local v = rxBuf[2 + i*2] * 256 + rxBuf[3 + i*2]
     if v >= 32768 then v = v - 65536 end
+    v = math.max(-1024, math.min(1024, v))
     channels[i + 1] = v
-    -- Write to GVars (GV1..GV8). model.setGlobalVariable(idx, flightMode, value)
-    -- is available in all EdgeTX script types. Using pcall for safety.
-    -- NOTE: EdgeTX silently ignores values outside [-1024, 1024] (no clamping).
-    pcall(model.setGlobalVariable, i, 0, v)
+    if tr then
+      tr[i + 1] = math.floor(v / 2)
+    else
+      pcall(model.setGlobalVariable, i, 0, v)
+    end
   end
+  if tr then pcall(setTrainerChannels, tr) end
   lastRxTime = getTime()
 end
 
