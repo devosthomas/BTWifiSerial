@@ -1304,7 +1304,8 @@ void webUiLoop() {
     // Proactive status push every 3 s — keeps the TCP connection alive
     // under WiFi/BLE coexistence and avoids relying solely on client polling.
     static uint32_t lastPush = 0;
-    if (s_ws.count() > 0 && millis() - lastPush >= 3000) {
+    uint32_t pushIntervalMs = bleIsConnecting() ? 8000 : 3000;
+    if (s_ws.count() > 0 && millis() - lastPush >= pushIntervalMs) {
         lastPush = millis();
 
         JsonDocument doc;
