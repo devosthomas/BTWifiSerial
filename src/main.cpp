@@ -28,16 +28,17 @@
 #include "lua_serial.h"
 #include "web_ui.h"
 
-// â”€â”€â”€ Runtime log level (defined here, declared extern in log.h) â”€â”€â”€â”€â”€
+// ───────── Runtime log level (defined here, declared extern in log.h) ─────────
 uint8_t g_logLevel = LOG_LEVEL;
 
-// â”€â”€â”€ Global channel data â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ───────── Global channel data ────────────────────────────────────────────────
 ChannelData g_channelData;
 
-// ─── Boot mode via NVS (RTC_DATA_ATTR does NOT survive ESP.restart on ESP32-C3) ─
-static constexpr uint8_t BOOT_NORMAL  = 0;
-static constexpr uint8_t BOOT_AP_MODE = 1;
+// ───────── Boot mode via NVS (RTC_DATA_ATTR does NOT survive ESP.restart on ESP32-C3) ─
+static constexpr uint8_t BOOT_NORMAL   = 0;
+static constexpr uint8_t BOOT_AP_MODE  = 1;
 static constexpr uint8_t BOOT_TELEM_AP = 2;  // WiFi AP + web UI + LuaSerial (no BLE, Lua not blocked)
+static constexpr uint8_t BOOT_STA_MODE = 3;  // WiFi STA + web UI + LuaSerial
 
 static uint8_t readBootMode() {
     Preferences p;
@@ -54,12 +55,12 @@ static void writeBootMode(uint8_t mode) {
     p.end();
 }
 
-// â”€â”€â”€ Application state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-enum class AppMode : uint8_t { NORMAL, AP_MODE, TELEM_AP };
+// ───────── Application state ──────────────────────────────────────────────────
+enum class AppMode : uint8_t { NORMAL, AP_MODE, TELEM_AP, STA_MODE };
 static AppMode s_appMode      = AppMode::NORMAL;
 static bool    s_serialActive = false;
 
-// â”€â”€â”€ Boot button debounce â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ───────── Boot button debounce ───────────────────────────────────────────────
 static constexpr uint32_t DEBOUNCE_MS     = 50;
 static constexpr uint32_t SHORT_PRESS_MAX = 1000;
 
@@ -69,14 +70,15 @@ static uint32_t s_lastDebounceTime = 0;
 static uint32_t s_buttonPressTime  = 0;
 static bool     s_buttonHandled    = false;
 
-// â”€â”€â”€ LED â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ───────── LED ────────────────────────────────────────────────────────────────
 static uint32_t s_lastLedToggle = 0;
 static bool     s_ledState      = false;
 
-// â”€â”€â”€ Forward declarations â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ───────── Forward declarations ───────────────────────────────────────────────
 static void startNormalMode();
 static void startApMode();
 static void startTelemetryApMode();
+static void startStaMode();
 static void stopSerialOutput();
 static void startSerialOutput();
 static void handleButton();
@@ -86,10 +88,11 @@ static void switchModeTo(AppMode next);
 void mainSetTelemOutput(uint8_t output);   // save config + restart into telemetry AP or normal
 void mainSetDeviceMode(uint8_t mode);      // save device mode + restart
 void mainSetMirrorBaud(uint32_t baud);     // save mirror baud + restart
+void mainSetWifiMode(uint8_t mode);        // save wifi mode + restart
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 // SETUP
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
 void setup() {
     // USB CDC: wait up to 5s for host enumeration after reset.
@@ -132,6 +135,9 @@ void setup() {
     } else if (bootMode == BOOT_TELEM_AP) {
         LOG_I("MAIN", "NVS: booting into Telemetry AP mode");
         startTelemetryApMode();
+    } else if (bootMode == BOOT_STA_MODE) {
+        LOG_I("MAIN", "NVS: booting into STA mode");
+        startStaMode();
     } else {
         LOG_I("MAIN", "NVS: booting into NORMAL mode");
         startNormalMode();
@@ -141,9 +147,9 @@ void setup() {
     LOG_I("MAIN", "Free heap: %u bytes", ESP.getFreeHeap());
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 // LOOP
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
 void loop() {
     handleButton();
@@ -176,15 +182,21 @@ void loop() {
             webUiLoop();
             if (s_serialActive) luaSerialLoop();
             break;
+
+        case AppMode::STA_MODE:
+            // STA mode: connected to an existing WiFi network + web UI + LuaSerial.
+            webUiLoop();
+            if (s_serialActive) luaSerialLoop();
+            break;
     }
 
     updateLed();
     yield();
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 // MODE MANAGEMENT
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
 static void startNormalMode() {
     LOG_I("MAIN", ">>> NORMAL MODE <<<");
@@ -200,6 +212,19 @@ static void startNormalMode() {
         g_config.telemetryOutput == TelemetryOutput::WIFI_UDP) {
         LOG_I("MAIN", "LUA Serial + WiFi UDP: redirecting to Telemetry AP mode");
         startTelemetryApMode();
+        return;
+    }
+
+    // WiFi Mode configured → redirect to the matching boot mode so the
+    // device automatically enters AP or STA on every normal boot.
+    if (g_config.wifiMode == WifiMode::AP) {
+        LOG_I("MAIN", "WiFi Mode=AP: redirecting to AP mode");
+        startApMode();
+        return;
+    }
+    if (g_config.wifiMode == WifiMode::STA) {
+        LOG_I("MAIN", "WiFi Mode=STA: redirecting to STA mode");
+        startStaMode();
         return;
     }
 
@@ -265,6 +290,24 @@ static void startTelemetryApMode() {
     LOG_D("MAIN", "Telemetry AP mode running, heap: %u", ESP.getFreeHeap());
 }
 
+static void startStaMode() {
+    LOG_I("MAIN", ">>> STA MODE <<<  SSID=%s", g_config.staSsid);
+    LOG_D("MAIN", "Free heap: %u", ESP.getFreeHeap());
+
+    // WiFi STA starts inside webUiInit() which checks g_config.wifiMode.
+    // No BLE: single-radio constraint; WiFi takes the radio.
+    webUiInit();
+
+    if (g_config.serialMode == OutputMode::LUA_SERIAL) {
+        luaSerialInit();
+        luaSerialSetApMode(3);  // 3 = STA mode: Lua keeps running, no overlay
+        s_serialActive = true;
+    }
+
+    s_appMode = AppMode::STA_MODE;
+    LOG_D("MAIN", "STA mode running, heap: %u", ESP.getFreeHeap());
+}
+
 static void startSerialOutput() {
     stopSerialOutput();
     switch (g_config.serialMode) {
@@ -307,6 +350,9 @@ static void switchModeTo(AppMode next) {
     if (next == AppMode::AP_MODE) {
         LOG_I("MAIN", "Switching to AP mode (restarting...)");
         writeBootMode(BOOT_AP_MODE);
+    } else if (next == AppMode::STA_MODE) {
+        LOG_I("MAIN", "Switching to STA mode (restarting...)");
+        writeBootMode(BOOT_STA_MODE);
     } else {
         LOG_I("MAIN", "Switching to Normal mode (restarting...)");
         writeBootMode(BOOT_NORMAL);
@@ -374,9 +420,24 @@ void mainSetMirrorBaud(uint32_t baud) {
     ESP.restart();
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/**
+ * @brief Called by lua_serial.cpp — set WiFi mode (0=Off 1=AP 2=STA), save config, restart.
+ */
+void mainSetWifiMode(uint8_t mode) {
+    g_config.wifiMode = static_cast<WifiMode>(mode);
+    configSave();
+    uint8_t bootMode = BOOT_NORMAL;
+    if      (mode == 1) bootMode = BOOT_AP_MODE;
+    else if (mode == 2) bootMode = BOOT_STA_MODE;
+    writeBootMode(bootMode);
+    blinkLed(3, 80, 80);
+    delay(100);
+    ESP.restart();
+}
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 // BOOT BUTTON HANDLER
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
 static void handleButton() {
     bool reading = digitalRead(PIN_BOOT_BUTTON);
@@ -409,15 +470,17 @@ static void handleButton() {
     }
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 // LED INDICATOR
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
 
 static void updateLed() {
     uint32_t now = millis();
 
-    // AP mode: blink at 500 ms regardless of BLE state
-    if (s_appMode == AppMode::AP_MODE || s_appMode == AppMode::TELEM_AP) {
+    // AP/STA/TELEM mode: blink at 500 ms regardless of BLE state
+    if (s_appMode == AppMode::AP_MODE || s_appMode == AppMode::TELEM_AP ||
+        s_appMode == AppMode::STA_MODE) {
         if (now - s_lastLedToggle >= 500) {
             s_lastLedToggle = now;
             s_ledState = !s_ledState;

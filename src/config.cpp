@@ -23,7 +23,7 @@ void configLoad() {
         return;
     }
 
-    g_config.serialMode   = (OutputMode)prefs.getUChar("serialMode", (uint8_t)OutputMode::FRSKY);
+    g_config.serialMode   = (OutputMode)prefs.getUChar("serialMode", (uint8_t)OutputMode::LUA_SERIAL);
     g_config.deviceMode   = (DeviceMode)prefs.getUChar("devMode", (uint8_t)DeviceMode::TRAINER_IN);
     g_config.hasRemoteAddr = prefs.getBool("hasRmtAddr", false);
 
@@ -42,11 +42,19 @@ void configLoad() {
     g_config.udpPort         = prefs.getUShort("udpPort", 5010);
     g_config.sportBaud       = prefs.getULong("sportBaud", 57600);
 
-    // WiFi AP settings
+    // Trainer map mode
+    g_config.trainerMapMode  = (TrainerMapMode)prefs.getUChar("mapMode", (uint8_t)TrainerMapMode::MAP_GV);
+
+    // WiFi mode + credentials
+    g_config.wifiMode = (WifiMode)prefs.getUChar("wifiMode", (uint8_t)WifiMode::OFF);
     String ssid = prefs.getString("apSsid", "BTWifiSerial");
     strlcpy(g_config.apSsid, ssid.c_str(), sizeof(g_config.apSsid));
     String pass = prefs.getString("apPass", "12345678");
     strlcpy(g_config.apPass, pass.c_str(), sizeof(g_config.apPass));
+    String staSsid = prefs.getString("staSsid", "");
+    strlcpy(g_config.staSsid, staSsid.c_str(), sizeof(g_config.staSsid));
+    String staPass = prefs.getString("staPass", "");
+    strlcpy(g_config.staPass, staPass.c_str(), sizeof(g_config.staPass));
 
     prefs.end();
 
@@ -92,9 +100,15 @@ void configSave() {
     prefs.putUShort("udpPort", g_config.udpPort);
     prefs.putULong("sportBaud", g_config.sportBaud);
 
-    // WiFi AP settings
+    // Trainer map mode
+    prefs.putUChar("mapMode", (uint8_t)g_config.trainerMapMode);
+
+    // WiFi mode + credentials
+    prefs.putUChar("wifiMode", (uint8_t)g_config.wifiMode);
     prefs.putString("apSsid", g_config.apSsid);
     prefs.putString("apPass", g_config.apPass);
+    prefs.putString("staSsid", g_config.staSsid);
+    prefs.putString("staPass", g_config.staPass);
 
     prefs.end();
 
