@@ -214,11 +214,12 @@ local _initDone  = false
 local _prefsReady = false
 local _infoReady  = false
 local _prefsTick   = 0
+local _infoTick    = 0
 
 -- ── Connection / boot state ────────────────────────────────────────
 local CONN_TIMEOUT      = 800   -- ticks (≈ 8 s, 1 tick = 10 ms)
 local DISCONNECT_TIMEOUT = 300   -- ticks (≈ 3 s)
-local INIT_INFO_GRACE   = 180   -- ticks (≈ 1.8 s after prefs_ready)
+local INIT_GRACE        = 180   -- ticks (≈ 1.8 s) grace for the missing half
 local _connState     = "idle"
 local _connStartTick = 0
 local _connModal     = nil
@@ -274,10 +275,14 @@ local function requestInitialData()
   local now = getTime()
   if now - _initTick < 200 then return end   -- retry every 2 s
   _initTick = now
-  -- INFO_REQUEST already returns prefs + info + status from the ESP32.
-  -- Sending an extra PREF_REQUEST duplicates the largest burst and can delay
-  -- or starve INFO completion on the radio side.
-  serialWrite(proto.buildInfoRequest())
+  -- Split requests: send the missing piece individually to avoid a single
+  -- large burst that overflows the radio’s UART RX buffer.
+  if not _prefsReady then
+    serialWrite(proto.buildPrefRequest())
+  end
+  if not _infoReady then
+    serialWrite(proto.buildInfoRequest())
+  end
 end
 
 store.on("prefs_ready", function()
@@ -291,6 +296,7 @@ end)
 
 store.on("info_ready", function()
   _infoReady = true
+  _infoTick = getTime()
   _initDone = _prefsReady and _infoReady
   if _initDone and (_connState == "connecting" or _connState == "disconnected") then
     _onReady()
@@ -359,6 +365,7 @@ local function init()
   _prefsReady  = false
   _infoReady   = false
   _prefsTick   = 0
+  _infoTick    = 0
   _initTick    = 0
   _lastHbTick  = 0
   _lastRxTick  = getTime()
@@ -392,8 +399,18 @@ local function run(event, touchState)
 
   -- ── Connection gate ──────────────────────────────────────────────
   if _connState == "connecting" then
-    if _prefsReady and (_infoReady or (getTime() - _prefsTick >= INIT_INFO_GRACE)) then
-      _initDone = _prefsReady and _infoReady
+    -- Accept when both halves arrived
+    local bothReady = _prefsReady and _infoReady
+    -- Symmetric grace: if one half arrived, give the other INIT_GRACE ticks
+    local graceOk = false
+    if _prefsReady and not _infoReady and (getTime() - _prefsTick >= INIT_GRACE) then
+      graceOk = true
+    end
+    if _infoReady and not _prefsReady and (getTime() - _infoTick >= INIT_GRACE) then
+      graceOk = true
+    end
+    if bothReady or graceOk then
+      _initDone = bothReady
       _onReady()
     end
     if getTime() - _connStartTick >= CONN_TIMEOUT then
@@ -448,6 +465,7 @@ local function run(event, touchState)
     _prefsReady   = false
     _infoReady    = false
     _prefsTick    = 0
+    _infoTick     = 0
     _initTick     = 0
     store.reset()
     _updateDotBoard(false)

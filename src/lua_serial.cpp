@@ -231,6 +231,105 @@ static void sendPrefAll() {
     sendPrefEnd();
 }
 
+// ── Pref / Info drip-feed ─────────────────────────────────────────────
+// Sends PREF and/or INFO frames one-at-a-time with gaps to prevent
+// overflowing the radio’s small serial RX buffer.  Similar pattern
+// to the existing BLE / WiFi scan drip-feeds.
+// Forward declarations for functions used in processDrip()
+static void sendInfoBegin(uint8_t count);
+static void sendInfoEnd();
+static void sendInfoItem(uint8_t id);
+static void sendStatusFrame();
+
+
+static constexpr uint32_t DRIP_INTERVAL_MS = 8;  // ms between frames
+
+enum DripPhase : uint8_t {
+    DRIP_IDLE = 0,
+    DRIP_PREF_BEGIN,
+    DRIP_PREF_ITEMS,
+    DRIP_PREF_END,
+    DRIP_INFO_BEGIN,
+    DRIP_INFO_ITEMS,
+    DRIP_INFO_END,
+    DRIP_STATUS,
+};
+
+static DripPhase s_dripPhase   = DRIP_IDLE;
+static uint8_t   s_dripIdx     = 0;
+static uint32_t  s_lastDripMs  = 0;
+static bool      s_dripInfo    = false;   // include info+status after prefs
+
+static const uint8_t PREF_ORDER[] = {
+    LUA_PREF_WIFI_MODE, LUA_PREF_DEV_MODE, LUA_PREF_TELEM_OUT,
+    LUA_PREF_MIRROR_BAUD, LUA_PREF_MAP_MODE,
+    LUA_PREF_BT_NAME, LUA_PREF_AP_SSID, LUA_PREF_UDP_PORT, LUA_PREF_AP_PASS,
+    LUA_PREF_STA_SSID, LUA_PREF_STA_PASS
+};
+
+// Start a drip-feed.  includeInfo=true: prefs + info + status.
+//                     includeInfo=false: prefs only.
+static void startDrip(bool includeInfo) {
+    s_dripPhase = DRIP_PREF_BEGIN;
+    s_dripIdx   = 0;
+    s_dripInfo  = includeInfo;
+    s_lastDripMs = millis() - DRIP_INTERVAL_MS;   // fire first frame immediately
+}
+
+// Called each iteration of luaSerialLoop().
+static void processDrip() {
+    if (s_dripPhase == DRIP_IDLE) return;
+    uint32_t now = millis();
+    if (now - s_lastDripMs < DRIP_INTERVAL_MS) return;
+    s_lastDripMs = now;
+
+    switch (s_dripPhase) {
+        case DRIP_PREF_BEGIN:
+            sendPrefBegin(LUA_PREF_COUNT);
+            s_dripIdx   = 0;
+            s_dripPhase = DRIP_PREF_ITEMS;
+            break;
+
+        case DRIP_PREF_ITEMS:
+            sendPrefItem(PREF_ORDER[s_dripIdx++]);
+            if (s_dripIdx >= LUA_PREF_COUNT)
+                s_dripPhase = DRIP_PREF_END;
+            break;
+
+        case DRIP_PREF_END:
+            sendPrefEnd();
+            s_dripPhase = s_dripInfo ? DRIP_INFO_BEGIN : DRIP_IDLE;
+            s_dripIdx   = 0;
+            break;
+
+        case DRIP_INFO_BEGIN:
+            sendInfoBegin(LUA_INFO_COUNT);
+            s_dripIdx   = LUA_INFO_FIRMWARE;
+            s_dripPhase = DRIP_INFO_ITEMS;
+            break;
+
+        case DRIP_INFO_ITEMS:
+            sendInfoItem(s_dripIdx++);
+            if (s_dripIdx > LUA_INFO_WIFI_IP)
+                s_dripPhase = DRIP_INFO_END;
+            break;
+
+        case DRIP_INFO_END:
+            sendInfoEnd();
+            s_dripPhase = DRIP_STATUS;
+            break;
+
+        case DRIP_STATUS:
+            sendStatusFrame();
+            s_dripPhase = DRIP_IDLE;
+            break;
+
+        default:
+            s_dripPhase = DRIP_IDLE;
+            break;
+    }
+}
+
 // Send value-only update for one pref (after cascade or MAP_MODE save).
 static void sendPrefUpdate(uint8_t id) {
     uint8_t buf[32];
@@ -713,7 +812,7 @@ static void dispatchRxFrame(uint8_t ch, uint8_t typ, const uint8_t* payload, uin
     if (ch == LUA_CH_PREF) {
         if (typ == LUA_PT_PREF_REQUEST) {
             LOG_I("LUA", "PREF_REQUEST");
-            sendPrefAll();
+            startDrip(false);
         } else if (typ == LUA_PT_PREF_SET) {
             handlePrefSet(payload, len);
         }
@@ -721,9 +820,7 @@ static void dispatchRxFrame(uint8_t ch, uint8_t typ, const uint8_t* payload, uin
     } else if (ch == LUA_CH_INFO) {
         if (typ == LUA_PT_INFO_REQUEST) {
             LOG_I("LUA", "INFO_REQUEST");
-            sendPrefAll();
-            sendInfoAll();
-            sendStatusFrame();
+            startDrip(true);
             s_lastCfgMs = millis();
 
         } else if (typ == LUA_PT_INFO_HEARTBEAT) {
@@ -898,6 +995,8 @@ void luaSerialInit() {
     s_lastBleConnected = bleIsConnected();
     s_lastToolsCmdMs   = 0;
     s_tlmOutputActive  = false;
+    s_dripPhase        = DRIP_IDLE;
+    s_dripIdx          = 0;
 
     LOG_I("LUA", "Init: TX=%d RX=%d @ %lu baud (new CH/TYPE/LEN protocol)",
           PIN_SERIAL_TX, PIN_SERIAL_RX, LUA_BAUD);
@@ -945,9 +1044,11 @@ void luaSerialLoop() {
     if ((now - s_lastCfgMs >= LUA_CFG_INTERVAL) &&
         (now - s_lastToolsCmdMs < LUA_TOOLS_IDLE_TIMEOUT)) {
         s_lastCfgMs = now;
-        sendPrefAll();
-        sendInfoAll();
+        startDrip(true);
     }
+
+    // Process pref/info drip-feed
+    processDrip();
 
     // BLE scan state tracking + drip-feed
     bool scanning = bleIsScanning();
