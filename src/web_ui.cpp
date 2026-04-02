@@ -147,6 +147,7 @@ progress{width:100%;height:8px;margin-top:10px;display:none;accent-color:var(--a
     <option value="trainer_in">Trainer IN (Central)</option>
     <option value="trainer_out">Trainer OUT (Peripheral)</option>
     <option value="telemetry">Telemetry</option>
+    <option value="elrs_ht">ELRS HT (Head Tracking)</option>
   </select>
   <label>Serial Mode</label>
   <select id="selMode" onchange="systemSerialChanged()">
@@ -387,7 +388,7 @@ function handle(m){
     document.getElementById('bDot').className='dot '+(ok?'ok':'er');
     document.getElementById('bSt').textContent=ok?'Connected':'Disconnected';
     document.getElementById('sMode').textContent=m.serialMode||'--';
-    const dmLabels={'trainer_in':'Trainer IN','trainer_out':'Trainer OUT','telemetry':'Telemetry'};
+    const dmLabels={'trainer_in':'Trainer IN','trainer_out':'Trainer OUT','telemetry':'Telemetry','elrs_ht':'ELRS HT'};
     document.getElementById('bRole').textContent=dmLabels[m.deviceMode]||m.deviceMode||'--';
     const btm=m.deviceMode==='trainer_in'?'Master (Central)':'Slave (Peripheral)';
     document.getElementById('btMode').textContent=btm;
@@ -736,6 +737,7 @@ static void handleWebSocketMessage(AsyncWebSocketClient* client, uint8_t* data, 
             case DeviceMode::TRAINER_IN:  resp["deviceMode"] = "trainer_in";  break;
             case DeviceMode::TRAINER_OUT: resp["deviceMode"] = "trainer_out"; break;
             case DeviceMode::TELEMETRY:   resp["deviceMode"] = "telemetry";   break;
+            case DeviceMode::ELRS_HT:     resp["deviceMode"] = "elrs_ht";     break;
         }
 
         // Telemetry output settings
@@ -777,6 +779,7 @@ static void handleWebSocketMessage(AsyncWebSocketClient* client, uint8_t* data, 
         if      (strcmp(dev, "trainer_in") == 0)  g_config.deviceMode = DeviceMode::TRAINER_IN;
         else if (strcmp(dev, "trainer_out") == 0) g_config.deviceMode = DeviceMode::TRAINER_OUT;
         else if (strcmp(dev, "telemetry") == 0)   g_config.deviceMode = DeviceMode::TELEMETRY;
+        else if (strcmp(dev, "elrs_ht") == 0)     g_config.deviceMode = DeviceMode::ELRS_HT;
       }
 
       if (map) {
@@ -1407,6 +1410,7 @@ void webUiLoop() {
             case DeviceMode::TRAINER_IN:  doc["deviceMode"] = "trainer_in";  break;
             case DeviceMode::TRAINER_OUT: doc["deviceMode"] = "trainer_out"; break;
             case DeviceMode::TELEMETRY:   doc["deviceMode"] = "telemetry";   break;
+            case DeviceMode::ELRS_HT:     doc["deviceMode"] = "elrs_ht";     break;
         }
 
         // Telemetry info for periodic push
