@@ -11,6 +11,7 @@
 #include "config.h"
 #include "channel_data.h"
 #include "ble_module.h"
+#include "elrs_espnow.h"
 #include "sport_telemetry.h"
 #include "build_ts_gen.h"
 #include "log.h"
@@ -138,6 +139,7 @@ static void sendPrefItem(uint8_t id) {
         case LUA_PREF_AP_PASS:     label = "AP Password";   ftype = LUA_FT_STRING; flags = LUA_PF_RESTART;                    break;
         case LUA_PREF_STA_SSID:    label = "STA SSID";      ftype = LUA_FT_STRING; flags = 0;                                  break;
         case LUA_PREF_STA_PASS:    label = "STA Password";  ftype = LUA_FT_STRING; flags = LUA_PF_RESTART;                    break;
+        case LUA_PREF_ELRS_BIND:   label = "ELRS Phrase";   ftype = LUA_FT_STRING; flags = LUA_PF_RESTART;                    break;
         default: return;
     }
 
@@ -155,10 +157,10 @@ static void sendPrefItem(uint8_t id) {
             break;
         }
         case LUA_PREF_DEV_MODE: {
-            static const char* opts[] = { "Trainer IN", "Trainer OUT", "Telemetry" };
-            buf[pos++] = 3;
+            static const char* opts[] = { "Trainer IN", "Trainer OUT", "Telemetry", "ELRS HT" };
+            buf[pos++] = 4;
             buf[pos++] = (uint8_t)g_config.deviceMode;
-            for (int i = 0; i < 3; i++) pos = appendLenStr(buf, pos, opts[i]);
+            for (int i = 0; i < 4; i++) pos = appendLenStr(buf, pos, opts[i]);
             break;
         }
         case LUA_PREF_TELEM_OUT: {
@@ -214,6 +216,11 @@ static void sendPrefItem(uint8_t id) {
             pos = appendLenStr(buf, pos, g_config.staPass);
             break;
         }
+        case LUA_PREF_ELRS_BIND: {
+            buf[pos++] = 31;   // maxLen
+            pos = appendLenStr(buf, pos, g_config.elrsBindPhrase);
+            break;
+        }
     }
 
     sendFrame(LUA_CH_PREF, LUA_PT_PREF_ITEM, buf, pos);
@@ -224,11 +231,112 @@ static void sendPrefAll() {
         LUA_PREF_WIFI_MODE, LUA_PREF_DEV_MODE, LUA_PREF_TELEM_OUT,
         LUA_PREF_MIRROR_BAUD, LUA_PREF_MAP_MODE,
         LUA_PREF_BT_NAME, LUA_PREF_AP_SSID, LUA_PREF_UDP_PORT, LUA_PREF_AP_PASS,
-        LUA_PREF_STA_SSID, LUA_PREF_STA_PASS
+        LUA_PREF_STA_SSID, LUA_PREF_STA_PASS,
+        LUA_PREF_ELRS_BIND
     };
     sendPrefBegin(LUA_PREF_COUNT);
     for (uint8_t id : ids) sendPrefItem(id);
     sendPrefEnd();
+}
+
+// ── Pref / Info drip-feed ─────────────────────────────────────────────
+// Sends PREF and/or INFO frames one-at-a-time with gaps to prevent
+// overflowing the radio’s small serial RX buffer.  Similar pattern
+// to the existing BLE / WiFi scan drip-feeds.
+// Forward declarations for functions used in processDrip()
+static void sendInfoBegin(uint8_t count);
+static void sendInfoEnd();
+static void sendInfoItem(uint8_t id);
+static void sendStatusFrame();
+
+
+static constexpr uint32_t DRIP_INTERVAL_MS = 8;  // ms between frames
+
+enum DripPhase : uint8_t {
+    DRIP_IDLE = 0,
+    DRIP_PREF_BEGIN,
+    DRIP_PREF_ITEMS,
+    DRIP_PREF_END,
+    DRIP_INFO_BEGIN,
+    DRIP_INFO_ITEMS,
+    DRIP_INFO_END,
+    DRIP_STATUS,
+};
+
+static DripPhase s_dripPhase   = DRIP_IDLE;
+static uint8_t   s_dripIdx     = 0;
+static uint32_t  s_lastDripMs  = 0;
+static bool      s_dripInfo    = false;   // include info+status after prefs
+
+static const uint8_t PREF_ORDER[] = {
+    LUA_PREF_WIFI_MODE, LUA_PREF_DEV_MODE, LUA_PREF_TELEM_OUT,
+    LUA_PREF_MIRROR_BAUD, LUA_PREF_MAP_MODE,
+    LUA_PREF_BT_NAME, LUA_PREF_AP_SSID, LUA_PREF_UDP_PORT, LUA_PREF_AP_PASS,
+    LUA_PREF_STA_SSID, LUA_PREF_STA_PASS,
+    LUA_PREF_ELRS_BIND
+};
+
+// Start a drip-feed.  includeInfo=true: prefs + info + status.
+//                     includeInfo=false: prefs only.
+static void startDrip(bool includeInfo) {
+    s_dripPhase = DRIP_PREF_BEGIN;
+    s_dripIdx   = 0;
+    s_dripInfo  = includeInfo;
+    s_lastDripMs = millis() - DRIP_INTERVAL_MS;   // fire first frame immediately
+}
+
+// Called each iteration of luaSerialLoop().
+static void processDrip() {
+    if (s_dripPhase == DRIP_IDLE) return;
+    uint32_t now = millis();
+    if (now - s_lastDripMs < DRIP_INTERVAL_MS) return;
+    s_lastDripMs = now;
+
+    switch (s_dripPhase) {
+        case DRIP_PREF_BEGIN:
+            sendPrefBegin(LUA_PREF_COUNT);
+            s_dripIdx   = 0;
+            s_dripPhase = DRIP_PREF_ITEMS;
+            break;
+
+        case DRIP_PREF_ITEMS:
+            sendPrefItem(PREF_ORDER[s_dripIdx++]);
+            if (s_dripIdx >= LUA_PREF_COUNT)
+                s_dripPhase = DRIP_PREF_END;
+            break;
+
+        case DRIP_PREF_END:
+            sendPrefEnd();
+            s_dripPhase = s_dripInfo ? DRIP_INFO_BEGIN : DRIP_IDLE;
+            s_dripIdx   = 0;
+            break;
+
+        case DRIP_INFO_BEGIN:
+            sendInfoBegin(LUA_INFO_COUNT);
+            s_dripIdx   = LUA_INFO_FIRMWARE;
+            s_dripPhase = DRIP_INFO_ITEMS;
+            break;
+
+        case DRIP_INFO_ITEMS:
+            sendInfoItem(s_dripIdx++);
+            if (s_dripIdx > LUA_INFO_WIFI_IP)
+                s_dripPhase = DRIP_INFO_END;
+            break;
+
+        case DRIP_INFO_END:
+            sendInfoEnd();
+            s_dripPhase = DRIP_STATUS;
+            break;
+
+        case DRIP_STATUS:
+            sendStatusFrame();
+            s_dripPhase = DRIP_IDLE;
+            break;
+
+        default:
+            s_dripPhase = DRIP_IDLE;
+            break;
+    }
 }
 
 // Send value-only update for one pref (after cascade or MAP_MODE save).
@@ -261,6 +369,10 @@ static void sendPrefUpdate(uint8_t id) {
         case LUA_PREF_BT_NAME:
             buf[pos++] = LUA_FT_STRING;
             pos = appendLenStr(buf, pos, g_config.btName);
+            break;
+        case LUA_PREF_ELRS_BIND:
+            buf[pos++] = LUA_FT_STRING;
+            pos = appendLenStr(buf, pos, g_config.elrsBindPhrase);
             break;
         default:
             return;
@@ -338,17 +450,25 @@ static void sendInfoItem(uint8_t id) {
         }
         case LUA_INFO_BT_ADDR: {
             label = "BT Addr";
-            const char* addr = bleGetLocalAddress();
-            // Fall back to the cached address persisted from the last BLE init.
-            // This ensures the field is populated even before BLE finishes starting.
-            if (!addr || addr[0] == '\0') addr = g_config.localBtAddr;
-            strlcpy(val, (addr && addr[0]) ? addr : "?", sizeof(val));
+            if (g_config.deviceMode == DeviceMode::ELRS_HT) {
+                strlcpy(val, "N/A", sizeof(val));
+            } else {
+                const char* addr = bleGetLocalAddress();
+                // Fall back to the cached address persisted from the last BLE init.
+                // This ensures the field is populated even before BLE finishes starting.
+                if (!addr || addr[0] == '\0') addr = g_config.localBtAddr;
+                strlcpy(val, (addr && addr[0]) ? addr : "?", sizeof(val));
+            }
             break;
         }
         case LUA_INFO_REM_ADDR: {
             label = "Remote Addr";
-            strlcpy(val, g_config.hasRemoteAddr ? g_config.remoteBtAddr : "(none)",
-                    sizeof(val));
+            if (g_config.deviceMode == DeviceMode::ELRS_HT) {
+                strlcpy(val, "N/A", sizeof(val));
+            } else {
+                strlcpy(val, g_config.hasRemoteAddr ? g_config.remoteBtAddr : "(none)",
+                        sizeof(val));
+            }
             break;
         }
         case LUA_INFO_WIFI_IP: {
@@ -385,15 +505,22 @@ static void sendInfoUpdate(uint8_t id) {
             snprintf(val, sizeof(val), "%.8s %.4s",
                      BUILD_TIMESTAMP, BUILD_TIMESTAMP + 8);
             break;
-        case LUA_INFO_BT_ADDR: {
-            const char* addr = bleGetLocalAddress();
-            if (!addr || addr[0] == '\0') addr = g_config.localBtAddr;
-            strlcpy(val, (addr && addr[0]) ? addr : "?", sizeof(val));
+        case LUA_INFO_BT_ADDR:
+            if (g_config.deviceMode == DeviceMode::ELRS_HT) {
+                strlcpy(val, "N/A", sizeof(val));
+            } else {
+                const char* addr = bleGetLocalAddress();
+                if (!addr || addr[0] == '\0') addr = g_config.localBtAddr;
+                strlcpy(val, (addr && addr[0]) ? addr : "?", sizeof(val));
+            }
             break;
-        }
         case LUA_INFO_REM_ADDR:
-            strlcpy(val, g_config.hasRemoteAddr ? g_config.remoteBtAddr : "(none)",
-                    sizeof(val));
+            if (g_config.deviceMode == DeviceMode::ELRS_HT) {
+                strlcpy(val, "N/A", sizeof(val));
+            } else {
+                strlcpy(val, g_config.hasRemoteAddr ? g_config.remoteBtAddr : "(none)",
+                        sizeof(val));
+            }
             break;
         case LUA_INFO_WIFI_IP:
             makeWifiIpText(val, sizeof(val));
@@ -428,6 +555,13 @@ static void sendChannelFrame() {
     sendFrame(LUA_CH_INFO, LUA_PT_INFO_CHANNELS, payload, 16);
 }
 
+// True when the upstream input source is actively providing data
+static bool isSourceConnected() {
+    return (g_config.deviceMode == DeviceMode::ELRS_HT)
+           ? elrsIsReceiving()
+           : bleIsConnected();
+}
+
 static void sendStatusFrame() {
     // bit0 = BLE connected,  bit1 = WiFi active (AP running OR STA connected),
     // bit2 = BLE connecting, bit3 = config changes pending restart
@@ -437,10 +571,12 @@ static void sendStatusFrame() {
     } else if (s_apMode == 3) {
         wifiActive = WiFi.isConnected() ? 0x02 : 0x00;
     }
-    uint8_t status = (bleIsConnected()  ? 0x01 : 0x00)
+    // bit0: connected (BLE or ELRS receiving)
+    bool connected = isSourceConnected();
+    uint8_t status = (connected           ? 0x01 : 0x00)
                    | wifiActive
-                   | (bleIsConnecting() ? 0x04 : 0x00)
-                   | (s_restartPending  ? 0x08 : 0x00);
+                   | (bleIsConnecting()   ? 0x04 : 0x00)
+                   | (s_restartPending    ? 0x08 : 0x00);
     sendFrame(LUA_CH_INFO, LUA_PT_INFO_STATUS, &status, 1);
 }
 
@@ -565,13 +701,26 @@ static void handlePrefSet(const uint8_t* payload, uint8_t len) {
         case LUA_PREF_DEV_MODE: {
             if (pos >= len) { sendPrefAck(id, 0x01); return; }
             uint8_t newIdx = payload[pos];
-            if (newIdx > 2) { sendPrefAck(id, 0x01); return; }
+            if (newIdx > 3) { sendPrefAck(id, 0x01); return; }
 
-            // Cascade: Trainer modes clear telemetry output
+            // Cascade: non-Telemetry modes clear telemetry output
             if (newIdx != 2 && g_config.telemetryOutput != TelemetryOutput::NONE) {
                 g_config.telemetryOutput = TelemetryOutput::NONE;
                 configSave();
                 sendPrefUpdate(LUA_PREF_TELEM_OUT);
+            }
+            // Cascade: ELRS_HT forces WiFi off and Trainer Map to GV
+            if (newIdx == 3) {
+                if (g_config.wifiMode != WifiMode::OFF) {
+                    g_config.wifiMode = WifiMode::OFF;
+                    configSave();
+                    sendPrefUpdate(LUA_PREF_WIFI_MODE);
+                }
+                if (g_config.trainerMapMode != TrainerMapMode::MAP_GV) {
+                    g_config.trainerMapMode = TrainerMapMode::MAP_GV;
+                    configSave();
+                    sendPrefUpdate(LUA_PREF_MAP_MODE);
+                }
             }
             g_config.deviceMode = static_cast<DeviceMode>(newIdx);
             configSave();
@@ -700,6 +849,20 @@ static void handlePrefSet(const uint8_t* payload, uint8_t len) {
             break;
         }
 
+        case LUA_PREF_ELRS_BIND: {
+            if (pos >= len) { sendPrefAck(id, 0x01); return; }
+            uint8_t vlen = payload[pos++];
+            if (vlen == 0 || pos + vlen > len) { sendPrefAck(id, 0x01); return; }
+            char str[32] = {};
+            memcpy(str, &payload[pos], std::min((int)vlen, 31));
+            strlcpy(g_config.elrsBindPhrase, str, sizeof(g_config.elrsBindPhrase));
+            configSave();
+            sendPrefAck(id, 0x00);
+            sendPrefUpdate(LUA_PREF_ELRS_BIND);
+            s_restartPending = true;
+            break;
+        }
+
         default:
             LOG_W("LUA", "PREF_SET: unknown pref id 0x%02X", id);
             sendPrefAck(id, 0x01);
@@ -713,7 +876,7 @@ static void dispatchRxFrame(uint8_t ch, uint8_t typ, const uint8_t* payload, uin
     if (ch == LUA_CH_PREF) {
         if (typ == LUA_PT_PREF_REQUEST) {
             LOG_I("LUA", "PREF_REQUEST");
-            sendPrefAll();
+            startDrip(false);
         } else if (typ == LUA_PT_PREF_SET) {
             handlePrefSet(payload, len);
         }
@@ -721,9 +884,7 @@ static void dispatchRxFrame(uint8_t ch, uint8_t typ, const uint8_t* payload, uin
     } else if (ch == LUA_CH_INFO) {
         if (typ == LUA_PT_INFO_REQUEST) {
             LOG_I("LUA", "INFO_REQUEST");
-            sendPrefAll();
-            sendInfoAll();
-            sendStatusFrame();
+            startDrip(true);
             s_lastCfgMs = millis();
 
         } else if (typ == LUA_PT_INFO_HEARTBEAT) {
@@ -898,6 +1059,8 @@ void luaSerialInit() {
     s_lastBleConnected = bleIsConnected();
     s_lastToolsCmdMs   = 0;
     s_tlmOutputActive  = false;
+    s_dripPhase        = DRIP_IDLE;
+    s_dripIdx          = 0;
 
     LOG_I("LUA", "Init: TX=%d RX=%d @ %lu baud (new CH/TYPE/LEN protocol)",
           PIN_SERIAL_TX, PIN_SERIAL_RX, LUA_BAUD);
@@ -910,10 +1073,11 @@ void luaSerialLoop() {
 
     uint32_t now = millis();
 
-    // Channel frame ~100 Hz — only while BLE connected, data is fresh, and not scanning
+    // Channel frame — 50 Hz for all modes (Lua scripts consume at 20-30 Hz)
     if (now - s_lastChMs >= LUA_CH_FRAME_INTERVAL) {
         s_lastChMs = now;
-        if (bleIsConnected() && !g_channelData.isStale(500) && !bleIsScanning()) {
+        bool active = isSourceConnected() && !bleIsScanning();
+        if (active && !g_channelData.isStale(500)) {
             sendChannelFrame();
         }
     }
@@ -921,13 +1085,12 @@ void luaSerialLoop() {
     // Status frame every 500 ms
     if (now - s_lastStatusMs >= LUA_STATUS_INTERVAL) {
         s_lastStatusMs = now;
-        bool connected = bleIsConnected();
+        bool connected = isSourceConnected();
         sendStatusFrame();
-        // BLE state changed → push updated info immediately
-        // On connect: wait until connectTask is done (s_remoteAddr set)
-        // to avoid sending an empty address.
+        // Connection state changed → push updated info immediately
         if (connected != s_lastBleConnected) {
-            if (!connected || !bleIsConnecting()) {
+            if (g_config.deviceMode == DeviceMode::ELRS_HT ||
+                !connected || !bleIsConnecting()) {
                 s_lastBleConnected = connected;
                 sendInfoUpdate(LUA_INFO_REM_ADDR);
             }
@@ -945,9 +1108,11 @@ void luaSerialLoop() {
     if ((now - s_lastCfgMs >= LUA_CFG_INTERVAL) &&
         (now - s_lastToolsCmdMs < LUA_TOOLS_IDLE_TIMEOUT)) {
         s_lastCfgMs = now;
-        sendPrefAll();
-        sendInfoAll();
+        startDrip(true);
     }
+
+    // Process pref/info drip-feed
+    processDrip();
 
     // BLE scan state tracking + drip-feed
     bool scanning = bleIsScanning();
