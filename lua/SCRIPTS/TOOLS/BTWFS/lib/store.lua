@@ -23,7 +23,7 @@ M.infoReady = false
 
 -- ── BLE / WiFi status ─────────────────────────────────────────────
 M.status = {
-  bleConnected  = false,
+  sourceConnected = false,  -- bit0: BLE connected (BLE modes) or ELRS receiving (ELRS_HT mode)
   wifiClients   = false,
   bleConnecting = false,
   restartPending = false,
@@ -140,7 +140,7 @@ end
 
 -- INFO_STATUS byte.
 function M.updateStatus(byte)
-  M.status.bleConnected  = bit32.band(byte, 0x01) ~= 0
+  M.status.sourceConnected = bit32.band(byte, 0x01) ~= 0
   M.status.wifiClients   = bit32.band(byte, 0x02) ~= 0
   M.status.bleConnecting = bit32.band(byte, 0x04) ~= 0
   M.status.restartPending = bit32.band(byte, 0x08) ~= 0

@@ -148,8 +148,8 @@ _updateDotELRS(false)
 -- React to status frames from ESP32
 store.on("status", function(s)
   _updateDotWifi(s.wifiClients)
-  _updateDotBLE(s.bleConnected, s.bleConnecting)
-  _updateDotELRS(s.bleConnected)  -- bit0 = ELRS receiving in ELRS mode
+  _updateDotBLE(s.sourceConnected, s.bleConnecting)
+  _updateDotELRS(s.sourceConnected)
 end)
 
 -- Swap BLE/ELRS indicator when prefs arrive

@@ -63,7 +63,7 @@
  *
  * Preference IDs:
  *   0x01  WIFI_MODE   ENUM  ["Off","AP","STA"]  PF_RESTART|PF_DASHBOARD
- *   0x02  DEV_MODE    ENUM  ["Trainer IN","Trainer OUT","Telemetry"]  PF_RESTART|PF_DASHBOARD
+ *   0x02  DEV_MODE    ENUM  ["Trainer IN","Trainer OUT","Telemetry","ELRS HT"]  PF_RESTART|PF_DASHBOARD
  *   0x03  TELEM_OUT   ENUM  ["WiFi UDP","BLE","Off"]  PF_RESTART|PF_DASHBOARD
  *   0x04  MIRROR_BAUD ENUM  ["57600","115200"]  PF_RESTART
  *   0x05  MAP_MODE    ENUM  ["GV","TR"]

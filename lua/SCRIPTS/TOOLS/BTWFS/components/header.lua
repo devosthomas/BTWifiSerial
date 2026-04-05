@@ -84,10 +84,12 @@ return function(ctx)
     if rp then
       local badgeTxt = "RESTART PENDING"
       local f = theme.F.small
-      local th = theme.FH.small
-      local tw = (lcd.sizeText and lcd.sizeText(badgeTxt, f)) or (#badgeTxt * 7)
+      local tw, th_actual
+      if lcd.sizeText then tw, th_actual = lcd.sizeText(badgeTxt, f) end
+      tw = tw or (#badgeTxt * 7)
+      local th = th_actual or theme.FH.small
       local px = scale.sx(10)
-      local py = scale.sy(4)
+      local py = math.max(3, scale.sy(4))
       local bw = tw + px * 2
       local bh = th + py * 2
       local bx = self.x + self.w - bw - scale.sx(12)
