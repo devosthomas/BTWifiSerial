@@ -264,7 +264,7 @@ return function(ctx)
     -- Auto-close BLE spinners when status changes
     store.on("status", function(s)
       if self._opState == OP_CONNECTING then
-        if s.bleConnected then
+        if s.sourceConnected then
           self._savedEdit = false; self._savedToggled = false
           store.scanResults = {}; store.scanState = 0
           self._findList:setRows({})
@@ -292,14 +292,14 @@ return function(ctx)
           self._opState = OP_NONE
         end
       elseif self._opState == OP_DISCONNECTING then
-        if not s.bleConnected then
+        if not s.sourceConnected then
           self._modal  = nil
           self._opTick = 0
           self._opState = OP_NONE
           self._savedEdit = false; self._savedToggled = false
         end
       elseif self._opState == OP_RECONNECTING then
-        if s.bleConnected then
+        if s.sourceConnected then
           self._modal  = nil
           self._opTick = 0
           self._opState = OP_NONE
@@ -366,7 +366,7 @@ return function(ctx)
           self._modal:show()
         else
           -- Primary action: Disconnect or Reconnect
-          if store.status.bleConnected then
+          if store.status.sourceConnected then
             self._modal = Modal.new({
               type     = "info",
               severity = "warning",
@@ -517,11 +517,11 @@ return function(ctx)
       -- Value text
       local valStr, valColor
       if isEditing then
-        local primaryLabel = store.status.bleConnected and "Disconnect" or "Reconnect"
+        local primaryLabel = store.status.sourceConnected and "Disconnect" or "Reconnect"
         valStr   = self._savedToggled and "Forget" or primaryLabel
         valColor = C_text
       else
-        local isConn  = store.status.bleConnected
+        local isConn  = store.status.sourceConnected
         valStr   = isConn and "Connected" or "Disconnected"
         valColor = isConn and C_green or C_red
       end

@@ -216,7 +216,12 @@ return function(ctx)
     -- ── React to store events ──────────────────────────────────
     store.on("prefs_ready", function()
       -- Clear any stale post-save modal (device may have just reconnected after restart).
-      self._modal    = nil
+      -- Do NOT clear confirm dialogs (e.g. "Restart Required") — the periodic
+      -- firmware resync fires every 30 s and would otherwise dismiss them before
+      -- the user has had a chance to respond.
+      if not self._modal or self._modal._type ~= "confirm" then
+        self._modal = nil
+      end
       self._savingId = nil
       -- Don't rebuild rows while inline text editor is active (would reset scroll)
       if not self._textEdit then
@@ -593,7 +598,7 @@ return function(ctx)
       return
     end
     -- Guard: BLE must not be active (single-radio device)
-    if store.status.bleConnected or store.status.bleConnecting then
+    if store.status.sourceConnected or store.status.bleConnecting then
       self._modal = Modal.new({
         type = "alert", severity = "warning",
         title = "BLE Active",
