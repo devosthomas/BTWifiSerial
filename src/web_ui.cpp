@@ -907,6 +907,12 @@ static void handleWebSocketMessage(AsyncWebSocketClient* client, uint8_t* data, 
         }
         g_config.wifiMode = newMode;
 
+        // Cascade: AP/STA can't coexist with ELRS_HT (ESP-NOW uses the radio)
+        if (newMode != WifiMode::OFF && g_config.deviceMode == DeviceMode::ELRS_HT) {
+            g_config.deviceMode = DeviceMode::TRAINER_IN;
+            LOG_I("WEB", "WiFi enabled — device mode reset from ELRS_HT to TRAINER_IN");
+        }
+
         if (newMode == WifiMode::AP) {
             const char* ss = doc["apSsid"];
             const char* pw = doc["apPass"];
@@ -1225,6 +1231,24 @@ void webUiInit() {
             return;
         }
 
+        // Force standard 802.11 b/g/n — ELRS ESP-NOW enables the proprietary
+        // WIFI_PROTOCOL_LR which may persist in NVS; clients can't see LR
+        // beacons.  Must be called AFTER softAP() so the AP interface exists.
+        esp_wifi_set_protocol(WIFI_IF_AP,
+            WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
+
+        // Restore factory AP MAC from eFuse in case ELRS ESP-NOW's
+        // esp_wifi_set_mac(STA) persisted a custom MAC to NVS and the
+        // AP derived its MAC from the corrupted STA base.
+        {
+            uint8_t factoryMac[6];
+            esp_read_mac(factoryMac, ESP_MAC_WIFI_SOFTAP);
+            esp_wifi_set_mac(WIFI_IF_AP, factoryMac);
+            LOG_D("WEB", "AP MAC set to factory: %02X:%02X:%02X:%02X:%02X:%02X",
+                  factoryMac[0], factoryMac[1], factoryMac[2],
+                  factoryMac[3], factoryMac[4], factoryMac[5]);
+        }
+
         // Wait until the AP interface has a valid IP (DHCP server ready)
         {
             uint32_t t0 = millis();
@@ -1241,10 +1265,8 @@ void webUiInit() {
 
         delay(200);  // let AP + DHCP stabilise before starting HTTP server
 
-        // BLE is NOT initialized yet (lazy init), so WIFI_PS_NONE is safe here.
         // Disabling modem-sleep ensures beacons are sent on time and the SSID
-        // stays visible consistently. The coex scheduler will take over once
-        // ensureController() is called later.
+        // stays visible consistently.
         esp_wifi_set_ps(WIFI_PS_NONE);
 
         LOG_I("WEB", "AP started: SSID=%s IP=%s",

@@ -348,7 +348,10 @@ static void sendPrefUpdate(uint8_t id) {
     switch (id) {
         case LUA_PREF_WIFI_MODE:
             buf[pos++] = LUA_FT_ENUM;
-            buf[pos++] = wifiModeIdx();
+            // Use the saved config value, not the running-state wifiModeIdx().
+            // After a PREF_SET the running state hasn't changed yet (pending
+            // restart), so wifiModeIdx() would incorrectly reflect the old mode.
+            buf[pos++] = (uint8_t)g_config.wifiMode;
             break;
         case LUA_PREF_DEV_MODE:
             buf[pos++] = LUA_FT_ENUM;
@@ -687,12 +690,23 @@ static void handlePrefSet(const uint8_t* payload, uint8_t len) {
                 configSave();
             }
 
+            // Cascade: AP/STA can't coexist with ELRS_HT (ESP-NOW uses the radio)
+            bool devModeChanged = false;
+            if (newIdx != 0 && g_config.deviceMode == DeviceMode::ELRS_HT) {
+                g_config.deviceMode = DeviceMode::TRAINER_IN;
+                devModeChanged = true;
+                configSave();
+            }
+
             sendPrefAck(id, 0x00);
             g_config.wifiMode = static_cast<WifiMode>(newIdx);
             configSave();
             sendPrefUpdate(LUA_PREF_WIFI_MODE);
             if (telemChanged) {
                 sendPrefUpdate(LUA_PREF_TELEM_OUT);
+            }
+            if (devModeChanged) {
+                sendPrefUpdate(LUA_PREF_DEV_MODE);
             }
             s_restartPending = true;
             break;

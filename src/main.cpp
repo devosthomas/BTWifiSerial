@@ -503,16 +503,13 @@ static void handleButton() {
                 uint32_t dur = millis() - s_buttonPressTime;
                 LOG_D("MAIN", "Boot button released after %lu ms", dur);
                 if (dur < SHORT_PRESS_MAX) {
-                    // ELRS_HT uses WiFi for ESP-NOW — AP mode not available
-                    if (g_config.deviceMode == DeviceMode::ELRS_HT) {
-                        LOG_I("MAIN", "AP mode disabled in ELRS_HT mode");
-                        blinkLed(1, 200, 0);
-                    } else {
-                        // Short press → switch mode via restart
-                        switchModeTo(s_appMode == AppMode::NORMAL
-                                        ? AppMode::AP_MODE
-                                        : AppMode::NORMAL);
-                    }
+                    // Short press → toggle AP / NORMAL via restart.
+                    // Safe in all device modes: switchModeTo() writes BOOT_AP_MODE
+                    // and restarts; startApMode() runs before startNormalMode(), so
+                    // ELRS_HT and AP never share the radio simultaneously.
+                    switchModeTo(s_appMode == AppMode::NORMAL
+                                    ? AppMode::AP_MODE
+                                    : AppMode::NORMAL);
                 }
                 s_buttonHandled = true;
             }
