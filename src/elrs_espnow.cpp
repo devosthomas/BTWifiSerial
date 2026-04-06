@@ -130,7 +130,12 @@ void elrsInit() {
     s_lastEnableMs = 0;
     s_wasActive = false;
 
-    // WiFi STA mode for ESP-NOW on channel 1
+    // WiFi STA mode for ESP-NOW on channel 1.
+    // persistent(false) is critical: without it, WiFi.mode(WIFI_STA) and
+    // WiFi.begin() persist STA config to NVS.  On next boot (e.g. AP mode)
+    // the WiFi driver loads that stale STA state during esp_wifi_init(),
+    // corrupting the AP startup on the ESP32-C3 single-radio.
+    WiFi.persistent(false);
     WiFi.mode(WIFI_STA);
     WiFi.setTxPower(WIFI_POWER_8_5dBm);
     esp_wifi_set_protocol(WIFI_IF_STA,
